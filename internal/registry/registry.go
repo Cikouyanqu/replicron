@@ -11,8 +11,22 @@ type Token struct {
 	Gen  uint64
 }
 
+// Locker is the mutual-exclusion contract used by the engine. Implementations
+// range from the in-process Registry to expiring database leases shared by
+// multiple replicron instances.
+type Locker interface {
+	Acquire(name string) (*Token, bool)
+	Release(t *Token)
+}
+
+// Renewer is an optional Locker extension for leases that expire (e.g. the
+// database lease); the engine renews on progress so long runs keep their
+// lease while genuinely dead instances lose theirs after the TTL.
+type Renewer interface {
+	Renew(t *Token)
+}
+
 // Registry is an in-process, single-instance mutex map keyed by task name.
-// Multi-instance locking (e.g. via a database lease table) is on the roadmap.
 type Registry struct {
 	mu      sync.Mutex
 	running map[string]*Token

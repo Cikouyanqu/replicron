@@ -14,13 +14,15 @@ import (
 	"github.com/Cikouyanqu/replicron/internal/config"
 	"github.com/Cikouyanqu/replicron/internal/engine"
 	"github.com/Cikouyanqu/replicron/internal/metrics"
+	"github.com/Cikouyanqu/replicron/internal/registry"
 	"github.com/Cikouyanqu/replicron/internal/runlog"
 )
 
 // Run blocks until ctx is cancelled, executing tasks on their schedules.
 // Cancelling ctx also cancels in-flight runs, which then finalize with
-// status "failed" before the process exits.
-func Run(ctx context.Context, cfg *config.Config, dbPath, addr string, keepRuns int, log *slog.Logger) error {
+// status "failed" before the process exits. A non-nil lock replaces the
+// default in-process mutex (used for multi-instance database leases).
+func Run(ctx context.Context, cfg *config.Config, dbPath, addr string, keepRuns int, lock registry.Locker, log *slog.Logger) error {
 	store, err := runlog.Open(dbPath)
 	if err != nil {
 		return fmt.Errorf("open run log: %w", err)
@@ -32,6 +34,9 @@ func Run(ctx context.Context, cfg *config.Config, dbPath, addr string, keepRuns 
 
 	met := metrics.New()
 	eng := engine.New(store, met, log)
+	if lock != nil {
+		eng.Reg = lock
+	}
 
 	c := cron.New(cron.WithSeconds())
 	scheduled := 0

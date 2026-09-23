@@ -33,7 +33,7 @@ func (NoopMetrics) ObserveRun(string, model.RunStatus, int64, int64, time.Durati
 // Engine runs tasks. The opener functions are indirection points so tests
 // can substitute in-memory connectors.
 type Engine struct {
-	Reg  *registry.Registry
+	Reg  registry.Locker
 	Log  *slog.Logger
 	Met  Metrics
 	Runs *runlog.Store
@@ -209,6 +209,11 @@ func (e *Engine) RunTask(ctx context.Context, t config.Task, trigger string) *mo
 		}
 
 		totalSeen += int64(len(page))
+		// Expiring lockers (database lease) renew on progress so long runs
+		// keep their lease; the in-process registry does not implement Renew.
+		if renews, ok := e.Reg.(registry.Renewer); ok {
+			renews.Renew(tok)
+		}
 		if runID > 0 {
 			_ = e.Runs.Event(runID, "progress", map[string]int64{
 				"seen": totalSeen, "ok": res.OKRows, "fail": res.FailRows,

@@ -108,9 +108,11 @@ tasks:
 | 命令 | 用途 |
 |---|---|
 | `replicron run -c FILE [-t TASK]` | 匹配的任务各跑一次后退出 |
-| `replicron schedule -c FILE [--addr :9101]` | 守护进程：cron 循环 + `/metrics` + `/healthz` |
+| `replicron schedule -c FILE [--addr :9101] [--locking db]` | 守护进程：cron 循环 + `/metrics` + `/healthz` |
 | `replicron validate -c FILE` | 解析校验配置并打印摘要 |
 | `replicron runs [--db FILE] [-t TASK] [-n 20]` | 查看最近的运行记录 |
+
+**多实例**：默认互斥在进程内。多个 replicron 实例共享同一个 `--db` 文件时，加 `--locking db` 启用数据库租约表互斥——租约带 TTL（`--lease-ttl`，默认 10m，崩溃实例到期自动让位），长任务按分页进度续租；取值应大于最慢单页耗时。
 
 ### 指标
 
@@ -158,7 +160,7 @@ tasks:
 ### Roadmap
 
 - [x] 增量同步（水位列 + 状态跟踪）
-- [ ] 数据库租约表实现多实例互斥
+- [x] 数据库租约表实现多实例互斥
 - [ ] 失败运行的 webhook 通知（Slack / 钉钉 / 飞书）
 - [ ] 原生批量通道（`COPY`、`SqlBulkCopy`、`LOAD DATA`）应对大流量
 - [ ] 基于同一运行日志的最小 Web UI
@@ -291,9 +293,15 @@ Notes:
 | Command | Purpose |
 |---|---|
 | `replicron run -c FILE [-t TASK]` | Run matching tasks once, then exit |
-| `replicron schedule -c FILE [--addr :9101]` | Daemon: cron loop + `/metrics` + `/healthz` |
+| `replicron schedule -c FILE [--addr :9101] [--locking db]` | Daemon: cron loop + `/metrics` + `/healthz` |
 | `replicron validate -c FILE` | Parse and validate the config, print a summary |
 | `replicron runs [--db FILE] [-t TASK] [-n 20]` | List recent run records |
+
+**Multi-instance**: by default the task mutex is in-process. When several
+replicron instances share the same `--db` file, pass `--locking db` to switch
+to a database lease table — leases carry a TTL (`--lease-ttl`, default 10m,
+so crashed instances yield automatically), long runs renew per page, and the
+TTL should exceed your slowest page.
 
 ### Metrics
 
@@ -366,7 +374,7 @@ Notes:
 ### Roadmap
 
 - [x] Incremental sync (watermark column + state tracking)
-- [ ] Multi-instance locking via a database lease table
+- [x] Multi-instance locking via a database lease table
 - [ ] Webhook notifications (Slack/DingTalk/Feishu) on failed runs
 - [ ] Native bulk paths (`COPY`, `SqlBulkCopy`, `LOAD DATA`) for large volumes
 - [ ] Optional minimal web UI over the same run log
