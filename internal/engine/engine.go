@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/Cikouyanqu/replicron/internal/config"
@@ -117,9 +118,39 @@ func (e *Engine) RunTask(ctx context.Context, t config.Task, trigger string) *mo
 		}
 	}()
 
+	// Incremental tasks substitute the tracked watermark into the query
+	// before streaming; the tracker folds the new maximum as rows arrive.
+	query := t.Source.Query
+	var wm *watermarkTracker
+	if t.Incremental != nil {
+		if !strings.Contains(query, watermarkToken) {
+			res.Status = model.RunStatusFailed
+			res.Err = "incremental task query must reference " + watermarkToken
+			return res
+		}
+		prev, werr := e.Runs.GetWatermark(t.Name)
+		if werr != nil {
+			res.Status = model.RunStatusFailed
+			res.Err = fmt.Sprintf("read watermark: %v", werr)
+			return res
+		}
+		lit := t.Incremental.Initial
+		if prev != nil {
+			lit, werr = watermarkLiteral(prev)
+			if werr != nil {
+				res.Status = model.RunStatusFailed
+				res.Err = fmt.Sprintf("render watermark: %v", werr)
+				return res
+			}
+		}
+		query = strings.ReplaceAll(query, watermarkToken, lit)
+		wm = &watermarkTracker{column: t.Incremental.Column}
+		e.Log.Info("incremental run", "task", t.Name, "watermark", lit)
+	}
+
 	keysChecked := false
 	var totalSeen int64
-	_, err = src.Stream(rctx, t.Source.Query, t.PageSize, func(page []model.Row) error {
+	_, err = src.Stream(rctx, query, t.PageSize, func(page []model.Row) error {
 		if len(page) == 0 {
 			return nil
 		}
@@ -133,11 +164,21 @@ func (e *Engine) RunTask(ctx context.Context, t config.Task, trigger string) *mo
 					return fmt.Errorf("upsert key %q missing from source columns %v", k, cols)
 				}
 			}
+			if t.Incremental != nil {
+				if _, ok := page[0][t.Incremental.Column]; !ok {
+					return fmt.Errorf("incremental.column %q missing from source columns %v", t.Incremental.Column, cols)
+				}
+			}
 			keysChecked = true
 		}
 		for i := range page {
 			if len(page[i]) != len(cols) {
 				return fmt.Errorf("row %d has %d columns, expected %d: heterogeneous result sets are unsupported", i, len(page[i]), len(cols))
+			}
+		}
+		if wm != nil {
+			if err := wm.observe(page); err != nil {
+				return fmt.Errorf("watermark column %q: %w", wm.column, err)
 			}
 		}
 
@@ -182,7 +223,35 @@ func (e *Engine) RunTask(ctx context.Context, t config.Task, trigger string) *mo
 		return res
 	}
 	res.Status = model.RunStatusSucceeded
+	if wm != nil {
+		e.finalizeWatermark(t, runID, res, wm)
+	}
 	return res
+}
+
+// finalizeWatermark advances the stored watermark only after a clean run:
+// with failed rows, holding the previous watermark makes the next run
+// re-read the same window, which idempotent upserts absorb safely.
+// A failed persist is logged, not fatal, for the same reason.
+func (e *Engine) finalizeWatermark(t config.Task, runID int64, res *model.RunResult, wm *watermarkTracker) {
+	switch {
+	case res.FailRows > 0:
+		e.Log.Warn("watermark held back: run had failed rows", "task", t.Name, "failed", res.FailRows)
+		if runID > 0 {
+			_ = e.Runs.Event(runID, "watermark_held", map[string]any{"reason": "failed rows", "count": res.FailRows})
+		}
+	case wm.max == nil:
+		// no non-NULL values this run: keep the previous watermark
+	default:
+		if err := e.Runs.SetWatermark(t.Name, wm.max); err != nil {
+			e.Log.Warn("watermark persist failed; next run re-reads the same window", "task", t.Name, "err", err)
+			return
+		}
+		e.Log.Info("watermark advanced", "task", t.Name, "value", wm.max)
+		if runID > 0 {
+			_ = e.Runs.Event(runID, "watermark_advanced", map[string]any{"value": fmt.Sprintf("%v", wm.max)})
+		}
+	}
 }
 
 func writeChunk(ctx context.Context, tgt connector.TargetConn, t config.Task, cols []string, chunk []model.Row) (int64, error) {

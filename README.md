@@ -81,7 +81,7 @@ tasks:
     source:
       type: postgres             # postgres | mysql | sqlite | sqlserver
       dsn_env: SRC_DSN           # dsn_env（推荐）或内联 dsn 二选一
-      query: "SELECT id, total, updated_at FROM orders WHERE updated_at > '2026-01-01'"
+      query: "SELECT id, total, updated_at FROM orders WHERE updated_at > :watermark"
 
     target:
       type: mysql
@@ -90,6 +90,10 @@ tasks:
       mode: upsert               # upsert（默认）| insert
       keys: [id]                 # upsert 必填；冲突判定键
       batch_size: 500            # 多行语句每批行数，默认 500
+
+    incremental:                 # 可选：水位增量抽取（见「增量同步」一节）
+      column: updated_at         # 引擎取本轮结果集中该列的最大值作为新水位
+      initial: "'1970-01-01'"    # 首次运行（无水位时）替换进查询的 SQL 字面量
 ```
 
 说明：
@@ -127,6 +131,22 @@ tasks:
 - **标识符走白名单**：表/列/键名必须匹配 `[A-Za-z_][A-Za-z0-9_]*` 并做方言转义；所有值都是绑定参数。源列名无法把 SQL 夹带进目标库。
 - **每轮独立连接 + 截止时间**：每轮在新 `context` 截止时间下开新连接；不挂死、不跨轮泄漏。
 
+### 增量同步
+
+配置 `incremental` 后，抽取从"每轮全量"变为"水位窗口"：
+
+1. 源查询中写 `:watermark` 占位符（必须存在，否则任务校验失败）。
+2. 每轮开始时，占位符被替换为**上一次干净运行**记录的水位；从未成功过则替换为 `initial` 字面量。
+3. 流式过程中引擎跟踪 `column` 列的最大值（按值的真实类型比较：时间/整数/浮点/字符串）。
+4. 仅当整轮**零行失败**时推进水位；有任何失败行则保持旧水位，下一轮重读同一窗口——配合幂等 upsert，重读无害、丢行不可接受。水位持久化失败同样只记日志不失败任务，下一轮照旧重读。
+
+注意事项：
+
+- `initial` 是**原样替换进 SQL 的字面量**：字符串要自带引号（`"'1970-01-01'"`），数字写 `0`。
+- 时间型水位统一按 UTC 归一后以 `'YYYY-MM-DD HH:MM:SS.ffffff'` 渲染；四种源方言均可解析。
+- MySQL 源建议 DSN 加 `parseTime=true`，让时间列成为真时间值；否则水位按字符串比较（标准格式下字典序安全）。
+- 水位列的类型必须稳定（同列不同行出现字符串与数字混型会判失败）；NULL 值跳过。
+
 ### 已知限制（v0.1）
 
 - 仅全量抽取：无水位/增量模式（见 Roadmap）。
@@ -137,7 +157,7 @@ tasks:
 
 ### Roadmap
 
-- [ ] 增量同步（水位列 + 状态跟踪）
+- [x] 增量同步（水位列 + 状态跟踪）
 - [ ] 数据库租约表实现多实例互斥
 - [ ] 失败运行的 webhook 通知（Slack / 钉钉 / 飞书）
 - [ ] 原生批量通道（`COPY`、`SqlBulkCopy`、`LOAD DATA`）应对大流量
@@ -305,6 +325,34 @@ Exposed on `/metrics` in `schedule` mode:
   under a `context` deadline; nothing hangs forever and nothing leaks across
   runs.
 
+### Incremental sync
+
+With `incremental` configured, extraction switches from full refresh to a
+watermark window:
+
+1. The source query references the `:watermark` token (required; the task
+   fails validation otherwise).
+2. At the start of each run the token is replaced with the watermark recorded
+   by the **last clean run**, or with the `initial` literal when none exists.
+3. While streaming, the engine tracks the maximum of `column` (compared by
+   the value's real type: time / integer / float / string).
+4. The watermark advances only after a run with **zero failed rows**; any
+   failure keeps the old watermark and the next run re-reads the same window —
+   with idempotent upserts, re-reading is harmless while losing rows is not.
+   A failed watermark persist is logged, not fatal, for the same reason.
+
+Notes:
+
+- `initial` is a SQL literal substituted verbatim: strings need embedded
+  quotes (`"'1970-01-01'"`), numbers are plain (`0`).
+- Time watermarks are normalized to UTC and rendered as
+  `'YYYY-MM-DD HH:MM:SS.ffffff'`, which all four source dialects parse.
+- For MySQL sources, prefer a DSN with `parseTime=true` so datetime columns
+  become real time values; otherwise the watermark compares as strings
+  (lexicographically safe for standard formats).
+- The watermark column type must be stable (mixed string/number values in one
+  column fail the run); NULL values are skipped.
+
 ### Limitations (v0.1)
 
 - Full-refresh extraction only: no watermark/incremental mode (roadmap).
@@ -317,7 +365,7 @@ Exposed on `/metrics` in `schedule` mode:
 
 ### Roadmap
 
-- [ ] Incremental sync (watermark column + state tracking)
+- [x] Incremental sync (watermark column + state tracking)
 - [ ] Multi-instance locking via a database lease table
 - [ ] Webhook notifications (Slack/DingTalk/Feishu) on failed runs
 - [ ] Native bulk paths (`COPY`, `SqlBulkCopy`, `LOAD DATA`) for large volumes

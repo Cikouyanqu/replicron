@@ -8,6 +8,8 @@ import (
 
 	"github.com/robfig/cron/v3"
 	"gopkg.in/yaml.v3"
+
+	"github.com/Cikouyanqu/replicron/internal/connector"
 )
 
 const (
@@ -34,15 +36,25 @@ type Target struct {
 	BatchSize int      `yaml:"batch_size,omitempty"`
 }
 
+// Incremental configures watermark-based incremental extraction: the source
+// query references the :watermark token, which is replaced with the tracked
+// maximum of Column from the last clean run (or with the Initial SQL literal
+// on the first run).
+type Incremental struct {
+	Column  string `yaml:"column"`  // source result column to track
+	Initial string `yaml:"initial"` // SQL literal used before any watermark exists
+}
+
 // Task is one replication unit.
 type Task struct {
-	Name     string   `yaml:"name"`
-	Schedule string   `yaml:"schedule,omitempty"` // 6-field cron with seconds; empty = manual only
-	Timeout  string   `yaml:"timeout,omitempty"`  // Go duration string, e.g. 30m
-	Enabled  *bool    `yaml:"enabled,omitempty"`
-	PageSize int      `yaml:"page_size,omitempty"`
-	Source   Endpoint `yaml:"source"`
-	Target   Target   `yaml:"target"`
+	Name        string       `yaml:"name"`
+	Schedule    string       `yaml:"schedule,omitempty"` // 6-field cron with seconds; empty = manual only
+	Timeout     string       `yaml:"timeout,omitempty"`  // Go duration string, e.g. 30m
+	Enabled     *bool        `yaml:"enabled,omitempty"`
+	PageSize    int          `yaml:"page_size,omitempty"`
+	Source      Endpoint     `yaml:"source"`
+	Target      Target       `yaml:"target"`
+	Incremental *Incremental `yaml:"incremental,omitempty"`
 
 	// Normalized fields derived by Validate; not part of the YAML surface.
 	TimeoutDur time.Duration `yaml:"-"`
@@ -152,6 +164,18 @@ func validateTask(t *Task) error {
 			return fmt.Errorf("timeout must be positive")
 		}
 		t.TimeoutDur = d
+	}
+
+	if t.Incremental != nil {
+		if t.Incremental.Column == "" {
+			return fmt.Errorf("incremental.column is required")
+		}
+		if err := connector.ValidateColumns([]string{t.Incremental.Column}); err != nil {
+			return fmt.Errorf("incremental.column: %w", err)
+		}
+		if t.Incremental.Initial == "" {
+			return fmt.Errorf("incremental.initial is required (SQL literal for the first run)")
+		}
 	}
 
 	t.IsEnabled = t.Enabled == nil || *t.Enabled

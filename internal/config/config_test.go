@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -175,5 +176,40 @@ tasks:
 	_, err := Load(writeConfig(t, yaml))
 	if err == nil || !strings.Contains(err.Error(), "environment variable DEMO_TARGET_DSN is empty") {
 		t.Errorf("want empty env error, got %v", err)
+	}
+}
+
+func TestIncrementalValidation(t *testing.T) {
+	base := `
+tasks:
+  - name: t
+    source: {type: sqlite, dsn: a, query: "SELECT id, updated_at FROM s WHERE updated_at > :watermark"}
+    target: {type: sqlite, dsn: b, table: t, keys: [id]}
+    incremental:
+      column: %s
+      initial: %s
+`
+	cases := []struct {
+		name, column, initial, want string
+	}{
+		{"missing column", `""`, `'0'`, "incremental.column is required"},
+		{"bad column name", `"bad col"`, `'0'`, "incremental.column"},
+		{"missing initial", `updated_at`, `""`, "incremental.initial is required"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Load(writeConfig(t, fmt.Sprintf(base, tc.column, tc.initial)))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("want error containing %q, got %v", tc.want, err)
+			}
+		})
+	}
+	yaml := fmt.Sprintf(base, "updated_at", `'1970-01-01'`)
+	cfg, err := Load(writeConfig(t, yaml))
+	if err != nil {
+		t.Fatalf("valid incremental config rejected: %v", err)
+	}
+	if cfg.Tasks[0].Incremental.Column != "updated_at" {
+		t.Errorf("incremental not parsed: %+v", cfg.Tasks[0].Incremental)
 	}
 }

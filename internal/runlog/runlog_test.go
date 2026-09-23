@@ -3,6 +3,7 @@ package runlog
 import (
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/Cikouyanqu/replicron/internal/model"
 )
@@ -123,5 +124,47 @@ func TestPrune(t *testing.T) {
 	// keep the newest
 	if runs[0].ID <= runs[1].ID {
 		t.Errorf("prune should keep newest runs, got ids %d,%d", runs[0].ID, runs[1].ID)
+	}
+}
+
+func TestWatermarkRoundtrip(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "runs.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+
+	if wm, err := s.GetWatermark("missing"); err != nil || wm != nil {
+		t.Errorf("missing task: wm=%v err=%v, want nil/nil", wm, err)
+	}
+
+	tm := time.Date(2026, 9, 23, 1, 2, 3, 500000000, time.UTC)
+	if err := s.SetWatermark("a", tm); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetWatermark("a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g, ok := got.(time.Time); !ok || !g.Equal(tm) {
+		t.Errorf("time watermark = %v, want %v", got, tm)
+	}
+
+	if err := s.SetWatermark("a", int64(7)); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ = s.GetWatermark("a"); got != int64(7) {
+		t.Errorf("int watermark = %v (%T), want 7", got, got)
+	}
+
+	if err := s.SetWatermark("a", "it's a string"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ = s.GetWatermark("a"); got != "it's a string" {
+		t.Errorf("string watermark = %v", got)
+	}
+
+	if err := s.SetWatermark("a", true); err == nil {
+		t.Error("bool watermark should be rejected")
 	}
 }

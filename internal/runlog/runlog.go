@@ -10,7 +10,9 @@ package runlog
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	_ "modernc.org/sqlite" // registers database/sql driver "sqlite" (pure Go, no CGO)
@@ -68,6 +70,11 @@ func (s *Store) migrate() error {
 			ts      TEXT NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_events_run ON run_events(run_id)`,
+		`CREATE TABLE IF NOT EXISTS task_state (
+			task  TEXT PRIMARY KEY,
+			kind  TEXT NOT NULL,
+			value TEXT NOT NULL
+		)`,
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.Exec(stmt); err != nil {
@@ -199,6 +206,65 @@ func (s *Store) Prune(keep int) error {
 		`DELETE FROM runs WHERE id NOT IN
 		  (SELECT id FROM runs ORDER BY id DESC LIMIT ?)`, keep)
 	return err
+}
+
+// GetWatermark returns the tracked incremental watermark for a task, or nil
+// when the task has never completed an incremental run.
+func (s *Store) GetWatermark(task string) (any, error) {
+	var kind, raw string
+	err := s.db.QueryRow(`SELECT kind, value FROM task_state WHERE task = ?`, task).Scan(&kind, &raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return decodeWatermark(kind, raw)
+}
+
+// SetWatermark persists the incremental watermark for a task.
+func (s *Store) SetWatermark(task string, v any) error {
+	kind, raw, err := encodeWatermark(v)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(
+		`INSERT INTO task_state (task, kind, value) VALUES (?, ?, ?)
+		 ON CONFLICT(task) DO UPDATE SET kind = excluded.kind, value = excluded.value`,
+		task, kind, raw)
+	return err
+}
+
+func encodeWatermark(v any) (kind, raw string, err error) {
+	switch x := v.(type) {
+	case time.Time:
+		return "time", x.UTC().Format(time.RFC3339Nano), nil
+	case int64:
+		return "int", strconv.FormatInt(x, 10), nil
+	case int:
+		return "int", strconv.Itoa(x), nil
+	case float64:
+		return "float", strconv.FormatFloat(x, 'g', -1, 64), nil
+	case string:
+		return "string", x, nil
+	default:
+		return "", "", fmt.Errorf("unsupported watermark value type %T", v)
+	}
+}
+
+func decodeWatermark(kind, raw string) (any, error) {
+	switch kind {
+	case "time":
+		return time.Parse(time.RFC3339Nano, raw)
+	case "int":
+		return strconv.ParseInt(raw, 10, 64)
+	case "float":
+		return strconv.ParseFloat(raw, 64)
+	case "string":
+		return raw, nil
+	default:
+		return nil, fmt.Errorf("unknown watermark kind %q", kind)
+	}
 }
 
 func (s *Store) Close() error { return s.db.Close() }

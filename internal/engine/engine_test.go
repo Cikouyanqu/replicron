@@ -20,14 +20,16 @@ import (
 // ---- fakes ----
 
 type fakeSource struct {
-	pages [][]model.Row
-	block chan struct{} // non-nil: wait for it or ctx cancellation per page
+	pages    [][]model.Row
+	block    chan struct{} // non-nil: wait for it or ctx cancellation per page
+	gotQuery string        // last query received from the engine
 }
 
 func (f *fakeSource) Connect(context.Context) error { return nil }
 func (f *fakeSource) Close() error                  { return nil }
 
-func (f *fakeSource) Stream(ctx context.Context, _ string, _ int, fn func([]model.Row) error) (int64, error) {
+func (f *fakeSource) Stream(ctx context.Context, query string, _ int, fn func([]model.Row) error) (int64, error) {
+	f.gotQuery = query
 	var total int64
 	for _, p := range f.pages {
 		if f.block != nil {
@@ -244,5 +246,115 @@ func TestInsertModeUsesInsertRows(t *testing.T) {
 	}
 	if tgt.insertCalls == 0 || tgt.upsertCalls != 0 {
 		t.Errorf("insert=%d upsert=%d, want insert path only", tgt.insertCalls, tgt.upsertCalls)
+	}
+}
+
+// ---- incremental (watermark) tests ----
+
+func mustTime(t *testing.T, s string) time.Time {
+	t.Helper()
+	tm, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tm
+}
+
+func incrementalTask() config.Task {
+	task := testTask()
+	task.Source.Query = "SELECT id, updated_at FROM src WHERE updated_at > :watermark"
+	task.Incremental = &config.Incremental{Column: "updated_at", Initial: "'2020-01-01'"}
+	return task
+}
+
+func TestIncrementalFirstRunUsesInitial(t *testing.T) {
+	src := &fakeSource{pages: [][]model.Row{{
+		{"id": 1, "updated_at": mustTime(t, "2026-01-01T10:00:00Z")},
+		{"id": 2, "updated_at": mustTime(t, "2026-01-02T10:00:00Z")},
+	}}}
+	e, store := newTestEngine(t, src, &fakeTarget{})
+	res := e.RunTask(context.Background(), incrementalTask(), "manual")
+	if res.Status != model.RunStatusSucceeded {
+		t.Fatalf("status = %s, err = %s", res.Status, res.Err)
+	}
+	if !strings.Contains(src.gotQuery, "'2020-01-01'") {
+		t.Errorf("first run should substitute initial literal, got query: %s", src.gotQuery)
+	}
+	wm, err := store.GetWatermark("demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tm, ok := wm.(time.Time)
+	if !ok || !tm.Equal(mustTime(t, "2026-01-02T10:00:00Z")) {
+		t.Errorf("watermark = %v, want max updated_at", wm)
+	}
+}
+
+func TestIncrementalSecondRunUsesStoredWatermark(t *testing.T) {
+	src := &fakeSource{pages: [][]model.Row{{
+		{"id": 3, "updated_at": mustTime(t, "2026-06-01T00:00:00Z")},
+	}}}
+	e, store := newTestEngine(t, src, &fakeTarget{})
+	prev := mustTime(t, "2026-05-05T12:30:00.5Z")
+	if err := store.SetWatermark("demo", prev); err != nil {
+		t.Fatal(err)
+	}
+	res := e.RunTask(context.Background(), incrementalTask(), "manual")
+	if res.Status != model.RunStatusSucceeded {
+		t.Fatalf("status = %s, err = %s", res.Status, res.Err)
+	}
+	want := "'" + prev.UTC().Format("2006-01-02 15:04:05.999999") + "'"
+	if !strings.Contains(src.gotQuery, want) {
+		t.Errorf("second run should substitute stored watermark %q, got query: %s", want, src.gotQuery)
+	}
+}
+
+func TestIncrementalMissingTokenFails(t *testing.T) {
+	task := incrementalTask()
+	task.Source.Query = "SELECT id, updated_at FROM src"
+	e, _ := newTestEngine(t, &fakeSource{}, &fakeTarget{})
+	res := e.RunTask(context.Background(), task, "manual")
+	if res.Status != model.RunStatusFailed || !strings.Contains(res.Err, ":watermark") {
+		t.Errorf("want failure mentioning :watermark, got %+v", res)
+	}
+}
+
+func TestIncrementalHeldBackOnFailures(t *testing.T) {
+	src := &fakeSource{pages: [][]model.Row{{
+		{"id": 1, "updated_at": mustTime(t, "2026-01-01T00:00:00Z"), "name": "bad"},
+	}}}
+	e, store := newTestEngine(t, src, &fakeTarget{failBatchMarker: "bad", failRowMarker: "bad"})
+	res := e.RunTask(context.Background(), incrementalTask(), "manual")
+	if res.Status != model.RunStatusSucceeded || res.FailRows != 1 {
+		t.Fatalf("unexpected result: %+v", res)
+	}
+	wm, err := store.GetWatermark("demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wm != nil {
+		t.Errorf("watermark advanced despite failures: %v", wm)
+	}
+}
+
+func TestIncrementalMixedColumnKindsFails(t *testing.T) {
+	src := &fakeSource{pages: [][]model.Row{{
+		{"id": 1, "updated_at": "2026-01-01"},
+		{"id": 2, "updated_at": 42},
+	}}}
+	e, _ := newTestEngine(t, src, &fakeTarget{})
+	res := e.RunTask(context.Background(), incrementalTask(), "manual")
+	if res.Status != model.RunStatusFailed || !strings.Contains(res.Err, "incomparable") {
+		t.Errorf("want failure on unstable watermark column, got %+v", res)
+	}
+}
+
+func TestIncrementalMissingColumnFails(t *testing.T) {
+	src := &fakeSource{pages: [][]model.Row{{{"id": 1}}}}
+	task := incrementalTask()
+	e, _ := newTestEngine(t, src, &fakeTarget{})
+	res := e.RunTask(context.Background(), task, "manual")
+	if res.Status != model.RunStatusFailed || !strings.Contains(res.Err, "updated_at") {
+		t.Errorf("want failure on missing incremental column, got %+v", res)
 	}
 }
