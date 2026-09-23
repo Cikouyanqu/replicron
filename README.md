@@ -27,7 +27,7 @@ replicron 按计划把源查询的结果行写入目标表，且天然支持安�
 - **追加式运行日志**：每次运行落 SQLite（含进度事件）；崩溃遗留的 running 记录重启时清扫为 interrupted。
 - **可观测性**：Prometheus `/metrics`、`/healthz`，以及 `--ui` 开启的只读运行面板（服务端渲染、零 JS、5 秒自刷新，展示运行列表/详情/事件与失败样本）。
 - **密钥不落配置**：DSN 通过环境变量（`dsn_env`）解析，凭据不进 YAML、不进 git。
-- **纯 Go 单静态二进制**：无 CGO，可交叉编译；提供 distroless 镜像。
+- **纯 Go 单静态二进制**：无 CGO，可交叉编译；容器镜像从 `scratch` 构建（仅二进制 + CA 证书），tag 推送自动发布到 ghcr.io。
 
 ### 快速开始
 
@@ -59,17 +59,21 @@ export TARGET_DSN="postgres://user:pass@localhost:5432/app"
 ./replicron schedule -c replicron.yaml   # 守护进程：cron + /metrics + /healthz
 ```
 
-Docker 方式：
+Docker 方式（发布版本直接拉取镜像；本地构建用 `docker build -t replicron .`）：
 
 ```bash
-docker build -t replicron .
 docker run --rm \
   -v "$PWD/replicron.yaml:/replicron.yaml:ro" \
   -e TARGET_DSN="postgres://..." \
-  replicron run -c /replicron.yaml
+  ghcr.io/cikouyanqu/replicron:latest run -c /replicron.yaml
 ```
 
-三容器演示（PostgreSQL + MySQL + replicron）见 [examples/docker-compose.yml](examples/docker-compose.yml)。
+三容器演示（PostgreSQL + MySQL + replicron，**开箱即跑**：首次启动自动建表并播种数据，replicron 每分钟把 PostgreSQL 的行同步进 MySQL，浏览器打开 `http://127.0.0.1:9101/ui` 观看运行面板）：
+
+```bash
+docker compose -f examples/docker-compose.yml up -d --build
+# 网络受限地区先 export GOPROXY=https://goproxy.cn,direct 再执行
+```
 
 ### 配置参考
 
@@ -226,7 +230,8 @@ be source or target (SQLite is a great zero-dependency choice for testing).
 - **Secrets stay out of config** — DSNs resolve from environment variables
   (`dsn_env`), so credentials never live in YAML or git.
 - **Single static binary** — pure Go (no CGO), cross-compiles anywhere;
-  distroless Docker image available.
+  the container image is built `FROM scratch` (binary + CA bundle only) and
+  published to ghcr.io automatically on version tags.
 
 ### Quickstart
 
@@ -258,18 +263,24 @@ export TARGET_DSN="postgres://user:pass@localhost:5432/app"
 ./replicron schedule -c replicron.yaml   # daemon: cron + /metrics + /healthz
 ```
 
-Or with Docker:
+Or with Docker (pull the released image; build locally with `docker build -t replicron .`):
 
 ```bash
-docker build -t replicron .
 docker run --rm \
   -v "$PWD/replicron.yaml:/replicron.yaml:ro" \
   -e TARGET_DSN="postgres://..." \
-  replicron run -c /replicron.yaml
+  ghcr.io/cikouyanqu/replicron:latest run -c /replicron.yaml
 ```
 
-A three-container demo (PostgreSQL + MySQL + replicron) is in
-[examples/docker-compose.yml](examples/docker-compose.yml).
+A three-container demo (PostgreSQL + MySQL + replicron) is **turnkey**:
+first start auto-creates and seeds the tables, replicron copies rows from
+PostgreSQL into MySQL every minute, and `http://127.0.0.1:9101/ui` shows the
+run dashboard:
+
+```bash
+docker compose -f examples/docker-compose.yml up -d --build
+# export GOPROXY=https://goproxy.cn,direct first on restricted networks
+```
 
 ### Configuration reference
 
