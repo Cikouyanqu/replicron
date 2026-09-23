@@ -159,7 +159,7 @@ func (s *Store) List(task string, n int) ([]model.Run, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []model.Run
 	for rows.Next() {

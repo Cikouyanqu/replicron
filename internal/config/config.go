@@ -140,8 +140,8 @@ func validateTask(t *Task) error {
 		}
 	}
 
-	switch {
-	case t.Timeout == "":
+	switch t.Timeout {
+	case "":
 		t.TimeoutDur = defaultTimeout
 	default:
 		d, err := time.ParseDuration(t.Timeout)

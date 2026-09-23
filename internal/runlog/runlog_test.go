@@ -12,7 +12,7 @@ func TestRunRoundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	id, err := s.StartRun("demo", "manual")
 	if err != nil {
@@ -81,7 +81,7 @@ func TestSweepInterrupted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s2.Close()
+	defer func() { _ = s2.Close() }()
 	runs, err := s2.List("", 10)
 	if err != nil {
 		t.Fatal(err)
@@ -99,7 +99,7 @@ func TestPrune(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	for i := 0; i < 5; i++ {
 		id, err := s.StartRun("demo", "manual")

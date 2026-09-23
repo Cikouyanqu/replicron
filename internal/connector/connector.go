@@ -146,7 +146,7 @@ func (c *sqlConn) Stream(ctx context.Context, query string, pageSize int, fn fun
 	if err != nil {
 		return 0, fmt.Errorf("%s query failed: %w", c.dialect.name, err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	cols, err := rows.Columns()
 	if err != nil {

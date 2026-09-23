@@ -28,7 +28,7 @@ func newRunCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer store.Close()
+			defer func() { _ = store.Close() }()
 
 			eng := engine.New(store, engine.NoopMetrics{}, log)
 			ran, failed := 0, 0

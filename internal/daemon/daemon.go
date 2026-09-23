@@ -25,7 +25,7 @@ func Run(ctx context.Context, cfg *config.Config, dbPath, addr string, keepRuns 
 	if err != nil {
 		return fmt.Errorf("open run log: %w", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	if err := store.Prune(keepRuns); err != nil {
 		log.Warn("run log prune failed", "err", err)
 	}

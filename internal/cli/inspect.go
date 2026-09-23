@@ -23,7 +23,10 @@ func newValidateCmd() *cobra.Command {
 				return err
 			}
 			w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-			fmt.Fprintln(w, "TASK\tSCHEDULE\tSOURCE\tTARGET TABLE\tMODE")
+			writef := func(format string, a ...any) {
+				_, _ = fmt.Fprintf(w, format, a...)
+			}
+			writef("TASK\tSCHEDULE\tSOURCE\tTARGET TABLE\tMODE\n")
 			for _, t := range cfg.Tasks {
 				sched := t.Schedule
 				if sched == "" {
@@ -32,7 +35,7 @@ func newValidateCmd() *cobra.Command {
 				if !t.IsEnabled {
 					sched += " [disabled]"
 				}
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+				writef("%s\t%s\t%s\t%s\t%s\n",
 					t.Name, sched, t.Source.Type, t.Target.Table, t.Target.Mode)
 			}
 			if err := w.Flush(); err != nil {
@@ -57,13 +60,16 @@ func newRunsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer store.Close()
+			defer func() { _ = store.Close() }()
 			runs, err := store.List(taskName, limit)
 			if err != nil {
 				return err
 			}
 			w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-			fmt.Fprintln(w, "ID\tTASK\tTRIGGER\tSTATUS\tTOTAL\tOK\tFAIL\tSTARTED (UTC)\tERROR")
+			writef := func(format string, a ...any) {
+				_, _ = fmt.Fprintf(w, format, a...)
+			}
+			writef("ID\tTASK\tTRIGGER\tSTATUS\tTOTAL\tOK\tFAIL\tSTARTED (UTC)\tERROR\n")
 			for _, r := range runs {
 				started := ""
 				if !r.StartedAt.IsZero() {
@@ -73,7 +79,7 @@ func newRunsCmd() *cobra.Command {
 				if errMsg == "" && len(r.Samples) > 0 {
 					errMsg = fmt.Sprintf("%d sample(s)", len(r.Samples))
 				}
-				fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%d\t%d\t%d\t%s\t%s\n",
+				writef("%d\t%s\t%s\t%s\t%d\t%d\t%d\t%s\t%s\n",
 					r.ID, r.Task, r.Trigger, r.Status,
 					r.TotalRows, r.OKRows, r.FailRows, started, errMsg)
 			}

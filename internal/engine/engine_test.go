@@ -46,12 +46,11 @@ func (f *fakeSource) Stream(ctx context.Context, _ string, _ int, fn func([]mode
 }
 
 type fakeTarget struct {
-	mu               sync.Mutex
-	upsertCalls      int
-	insertCalls      int
-	failBatchMarker  string // batches containing this string value fail as a batch
-	failRowMarker    string // individual rows containing this value always fail
-	failBatchErrOnce bool
+	mu              sync.Mutex
+	upsertCalls     int
+	insertCalls     int
+	failBatchMarker string // batches containing this string value fail as a batch
+	failRowMarker   string // individual rows containing this value always fail
 }
 
 func (f *fakeTarget) Connect(context.Context) error { return nil }
@@ -99,7 +98,7 @@ func newTestEngine(t *testing.T, src connector.SourceConn, tgt connector.TargetC
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { store.Close() })
+	t.Cleanup(func() { _ = store.Close() })
 	e := New(store, NoopMetrics{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	e.OpenSource = func(context.Context, string, string) (connector.SourceConn, error) { return src, nil }
 	e.OpenTarget = func(context.Context, string, string) (connector.TargetConn, error) { return tgt, nil }
