@@ -1,8 +1,12 @@
-# Three-container demo: PostgreSQL + MySQL + replicron.
-#   docker compose -f examples/docker-compose.yml up -d
-#   docker compose exec replicron replicron run -c /etc/replicron/demo.yaml
+# Turnkey three-container demo: PostgreSQL + MySQL + replicron.
 #
-# It copies a table from Postgres into MySQL every minute.
+#   docker compose -f examples/docker-compose.yml up -d --build
+#
+# Databases initialize themselves on first start (initdb/ scripts create and
+# seed source_table / target_table); replicron then copies rows from Postgres
+# into MySQL every minute. Open http://127.0.0.1:9101/ui to watch the runs.
+#
+# Host ports 55432/53306/9101 avoid clashing with locally installed engines.
 
 services:
   postgres:
@@ -11,7 +15,9 @@ services:
       POSTGRES_USER: demo
       POSTGRES_PASSWORD: demo
       POSTGRES_DB: demo
-    ports: ["5432:5432"]
+    ports: ["55432:5432"]
+    volumes:
+      - ./initdb/postgres:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U demo"]
       interval: 5s
@@ -25,7 +31,9 @@ services:
       MYSQL_DATABASE: demo
       MYSQL_USER: demo
       MYSQL_PASSWORD: demo
-    ports: ["3306:3306"]
+    ports: ["53306:3306"]
+    volumes:
+      - ./initdb/mysql:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -pdemo"]
       interval: 5s
@@ -33,7 +41,12 @@ services:
       retries: 10
 
   replicron:
-    build: ..
+    build:
+      context: ..
+      args:
+        # Mirrors restricted regions set GOPROXY in the environment, e.g.
+        #   GOPROXY=https://goproxy.cn,direct docker compose ... up --build
+        GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
     depends_on:
       postgres:
         condition: service_healthy
@@ -45,7 +58,7 @@ services:
     volumes:
       - ./demo.yaml:/etc/replicron/demo.yaml:ro
       - runlog:/var/lib/replicron
-    command: ["schedule", "-c", "/etc/replicron/demo.yaml", "--db", "/var/lib/replicron/runs.db", "--addr", ":9101"]
+    command: ["schedule", "-c", "/etc/replicron/demo.yaml", "--db", "/var/lib/replicron/runs.db", "--addr", ":9101", "--ui"]
     ports: ["9101:9101"]
 
 volumes:

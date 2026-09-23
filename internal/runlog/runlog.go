@@ -12,6 +12,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -29,6 +31,11 @@ func nowUTC() string { return time.Now().UTC().Format(time.RFC3339) }
 // Open opens (creating if needed) the run log database and applies
 // migrations plus the interrupted-run sweep.
 func Open(path string) (*Store, error) {
+	if path != ":memory:" {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return nil, fmt.Errorf("create run log directory: %w", err)
+		}
+	}
 	dsn := path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
