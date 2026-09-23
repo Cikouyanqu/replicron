@@ -114,3 +114,56 @@ func TestSQLServerBulkLoadIntegration(t *testing.T) {
 		t.Errorf("row count = %d, want 10 after idempotent re-run", n)
 	}
 }
+
+func TestMySQLUpsertIntegration(t *testing.T) {
+	dsn := os.Getenv("REPLICRON_IT_MYSQL_DSN")
+	if dsn == "" {
+		t.Skip("set REPLICRON_IT_MYSQL_DSN (e.g. demo:demo@tcp(localhost:3306)/demo) to run")
+	}
+	ctx := context.Background()
+	db, err := sql.Open("mysql", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	if _, err := db.Exec(`DROP TABLE IF EXISTS it_up`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE it_up (id INT PRIMARY KEY, name VARCHAR(100))`); err != nil {
+		t.Fatal(err)
+	}
+
+	tgt, err := OpenTarget(ctx, "mysql", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tgt.Close() }()
+
+	cols := []string{"id", "name"}
+	rows := bulkRows(10)
+	if _, err := tgt.UpsertRows(ctx, "it_up", []string{"id"}, cols, rows); err != nil {
+		t.Fatalf("batch upsert: %v", err)
+	}
+	// Re-running the same window must not duplicate rows.
+	if _, err := tgt.UpsertRows(ctx, "it_up", []string{"id"}, cols, rows); err != nil {
+		t.Fatalf("batch re-run: %v", err)
+	}
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM it_up`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 10 {
+		t.Errorf("rows = %d, want 10 after idempotent re-run", n)
+	}
+
+	extra := []model.Row{{"id": 11, "name": "row-l"}, {"id": 12, "name": "row-m"}}
+	if _, err := tgt.InsertRows(ctx, "it_up", cols, extra); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM it_up`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 12 {
+		t.Errorf("rows = %d, want 12 after inserts", n)
+	}
+}

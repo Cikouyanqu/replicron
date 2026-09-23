@@ -105,7 +105,7 @@ tasks:
 - `mode: insert` 走普通多行插入（空表初次装载更快；键冲突会报错）。
 - MySQL 的冲突判定跟随目标表现有的 UNIQUE 索引；`keys` 仅决定哪些列不参与更新。
 - SQL Server 批量自动限制在 2100 参数上限之内。
-- `bulk: true`（实验性）启用目标库**原生批量通道**：PostgreSQL 走 `COPY`（upsert 经会话临时表 + `ON CONFLICT` 合并），SQL Server 走 bulk 协议（`##` 全局临时表 + `MERGE`）。任何 bulk 错误会自动回退到常规批量语句并告警。MySQL 的 `LOAD DATA` 暂缓：go-sql-driver 的本地文件 handler 只能注册不能反注册，逐批注册会泄漏。
+- `bulk: true`（实验性）启用目标库**原生批量通道**：PostgreSQL 走 `COPY`（upsert 经会话临时表 + `ON CONFLICT` 合并），SQL Server 走 bulk 协议（会话临时表 + `MERGE`，全程独占一条连接）。任何 bulk 错误会自动回退到常规批量语句并告警。MySQL 的 `LOAD DATA` 暂缓：go-sql-driver 的本地文件 handler 只能注册不能反注册，逐批注册会泄漏。
 
 ### CLI
 
@@ -308,8 +308,8 @@ Notes:
   limit.
 - `bulk: true` (experimental) enables the target's **native bulk channel**:
   PostgreSQL uses `COPY` (upserts merge through a session temp table with
-  `ON CONFLICT`), SQL Server uses the bulk protocol (a `##` global temp table
-  plus `MERGE`). Any bulk error falls back to regular batch writes with a
+  `ON CONFLICT`), SQL Server uses the bulk protocol (a session temp table plus
+  `MERGE`, all on one dedicated connection). Any bulk error falls back to regular batch writes with a
   warning. MySQL `LOAD DATA` is deferred: go-sql-driver's local-file handlers
   register without an unregister API, so per-batch registration would leak.
 
