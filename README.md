@@ -11,7 +11,7 @@
 
 ## 中文文档
 
-replicron 按计划把源查询的结果行写入目标表，且天然支持安全重跑：所有写入路径都是幂等 upsert，因此重跑、重试或中途崩溃都不会产生重复数据。当你只需要"每天把 X 表同步到 Y 库"时，它是运行一整套 ELT 平台之外的轻量单二进制选择。
+replicron 按计划把源查询的结果行写入目标表，且天然支持安全重跑：所有写入路径都是幂等 upsert，因此重跑、重试或中途崩溃都不会产生重复数据。抽取可选全量或水位增量；单进程即可运行，多实例也能通过共享租约表互斥。当你只需要"每天把 X 表同步到 Y 库"时，它是运行一整套 ELT 平台之外的轻量单二进制选择。
 
 支持 **PostgreSQL、MySQL、SQLite、SQL Server**，任意组合互为源/目标（SQLite 是零依赖测试场景的好选择）。
 
@@ -19,8 +19,11 @@ replicron 按计划把源查询的结果行写入目标表，且天然支持安�
 
 - **声明式任务**：一个 YAML 描述"复制什么、到哪里、多久一次"。
 - **幂等 upsert**：按方言生成 `ON CONFLICT` / `ON DUPLICATE KEY` / `MERGE`，重跑永远安全。
+- **增量同步**：可选水位列 + `:watermark` 占位符；只在零失败运行后推进水位，失败自动重读同一窗口。
 - **cron 调度**：6 位表达式（含秒）；也支持手动一次性执行。
+- **弹性部署**：单进程零依赖；多实例共享 SQLite 租约表互斥（`--locking db`，TTL 过期自动让位、按进度续租）。
 - **优雅降级**：批量写失败自动降级逐行重试，单行坏数据不拖垮整轮；失败样本留存到运行日志。
+- **原生批量通道（实验性）**：PostgreSQL `COPY`、SQL Server bulk 协议，`target.bulk` 开启，出错自动回退批量语句。
 - **追加式运行日志**：每次运行落 SQLite（含进度事件）；崩溃遗留的 running 记录重启时清扫为 interrupted。
 - **可观测性**：Prometheus `/metrics`、`/healthz`，以及 `--ui` 开启的只读运行面板（服务端渲染、零 JS、5 秒自刷新，展示运行列表/详情/事件与失败样本）。
 - **密钥不落配置**：DSN 通过环境变量（`dsn_env`）解析，凭据不进 YAML、不进 git。
@@ -150,12 +153,14 @@ tasks:
 - MySQL 源建议 DSN 加 `parseTime=true`，让时间列成为真时间值；否则水位按字符串比较（标准格式下字典序安全）。
 - 水位列的类型必须稳定（同列不同行出现字符串与数字混型会判失败）；NULL 值跳过。
 
-### 已知限制（v0.1）
+### 已知限制
 
-- 仅全量抽取：无水位/增量模式（见 Roadmap）。
-- 无转换——列按名 1:1 复制。
+- 无转换——列按名 1:1 复制（映射用 `SELECT a AS b`）。
 - 不支持 BLOB/二进制列（文本 `[]byte` 按字符串复制）。
-- 单实例：调度互斥在进程内（Roadmap：数据库租约支持多实例 HA）。
+- 增量依赖源查询可重放（幂等 upsert 兜底重复）；没有 CDC/日志追踪能力。
+- 多实例互斥要求各实例共享同一个 `--db` 文件（如 NFS）：跨网络盘的 SQLite 有性能与一致性代价，实例同机或同卷最稳。
+- 原生 bulk 通道为实验性：PostgreSQL 与 SQL Server 可用，MySQL 暂缓（驱动限制，见配置说明）。
+- Web UI 只读且无内置鉴权：对外暴露端口请置于反代或内网之后。
 - 异构结果集（行间列不一致）会被拒绝。
 
 ### Roadmap
@@ -186,7 +191,9 @@ make build     # 静态二进制
 
 replicron moves rows from a source query into a target table on a schedule,
 safely re-runnable by design: every write path is an idempotent upsert, so a
-re-run, a retry or a crash mid-cycle can never duplicate data. It is a small,
+re-run, a retry or a crash mid-cycle can never duplicate data. Extraction is
+full-refresh or watermark-incremental; a single process is enough, and
+multiple instances can coordinate through a shared lease table. It is a small,
 single-binary alternative to running a full ELT platform when all you need is
 "copy table X into database Y every night".
 
@@ -198,10 +205,19 @@ be source or target (SQLite is a great zero-dependency choice for testing).
 - **Declarative tasks** — one YAML file describes what to copy, where, how often.
 - **Idempotent upserts** — `ON CONFLICT` / `ON DUPLICATE KEY` / `MERGE` per
   dialect; re-running a task is always safe.
+- **Incremental sync** — optional watermark column plus a `:watermark` token
+  in the query; the watermark advances only after zero-failure runs, and
+  failures re-read the same window.
 - **Cron scheduling** — 6-field expressions (with seconds) via a built-in
   scheduler; manual one-shot runs also supported.
+- **Flexible deployment** — single process with zero dependencies, or several
+  instances coordinating through a shared SQLite lease table
+  (`--locking db`, TTL expiry with per-page renewal).
 - **Graceful degradation** — batch writes that fail fall back to row-by-row so
   a single bad row never sinks a run; failures are sampled into the run log.
+- **Native bulk channel (experimental)** — PostgreSQL `COPY` and the SQL
+  Server bulk protocol behind `target.bulk`, with automatic fallback to batch
+  statements on error.
 - **Append-only run log** — every run is persisted to SQLite with progress
   events; runs orphaned by a crash are swept to `interrupted` on restart.
 - **Metrics & UI** — Prometheus `/metrics`, `/healthz`, and an opt-in
@@ -370,14 +386,20 @@ Notes:
 - The watermark column type must be stable (mixed string/number values in one
   column fail the run); NULL values are skipped.
 
-### Limitations (v0.1)
+### Limitations
 
-- Full-refresh extraction only: no watermark/incremental mode (roadmap).
-- No transforms — columns are copied 1:1 by name.
+- No transforms — columns are copied 1:1 by name (map with `SELECT a AS b`).
 - BLOB/binary columns are not supported (text `[]byte` values are copied as
   strings).
-- Single instance: the scheduler mutex is in-process (roadmap: DB lease for
-  multi-instance HA).
+- Incremental mode relies on replayable source queries (idempotent upserts
+  absorb duplicates); there is no CDC/log-tailing capability.
+- Multi-instance locking requires every instance to share the same `--db`
+  file (e.g. NFS): SQLite over a network share pays performance and
+  consistency costs — keep instances on the same host or volume.
+- The native bulk channel is experimental: available for PostgreSQL and SQL
+  Server, deferred for MySQL (driver limitation, see the configuration notes).
+- The web UI is read-only and unauthenticated by design: keep the port behind
+  a reverse proxy or on an internal network.
 - Heterogeneous result sets (rows with differing columns) are rejected.
 
 ### Roadmap

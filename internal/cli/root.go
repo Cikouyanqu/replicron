@@ -13,7 +13,7 @@ func NewRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:     "replicron",
 		Short:   "Cron-driven, idempotent table replication between SQL databases",
-		Version: "0.1.0",
+		Version: "0.2.0",
 	}
 	root.AddCommand(newRunCmd(), newScheduleCmd(), newValidateCmd(), newRunsCmd())
 	return root
