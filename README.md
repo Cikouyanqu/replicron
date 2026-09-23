@@ -102,6 +102,7 @@ tasks:
 - `mode: insert` 走普通多行插入（空表初次装载更快；键冲突会报错）。
 - MySQL 的冲突判定跟随目标表现有的 UNIQUE 索引；`keys` 仅决定哪些列不参与更新。
 - SQL Server 批量自动限制在 2100 参数上限之内。
+- `bulk: true`（实验性）启用目标库**原生批量通道**：PostgreSQL 走 `COPY`（upsert 经会话临时表 + `ON CONFLICT` 合并），SQL Server 走 bulk 协议（`##` 全局临时表 + `MERGE`）。任何 bulk 错误会自动回退到常规批量语句并告警。MySQL 的 `LOAD DATA` 暂缓：go-sql-driver 的本地文件 handler 只能注册不能反注册，逐批注册会泄漏。
 
 ### CLI
 
@@ -162,7 +163,7 @@ tasks:
 - [x] 增量同步（水位列 + 状态跟踪）
 - [x] 数据库租约表实现多实例互斥
 - [ ] 失败运行的 webhook 通知（Slack / 钉钉 / 飞书）
-- [ ] 原生批量通道（`COPY`、`SqlBulkCopy`、`LOAD DATA`）应对大流量
+- [x] 原生批量通道（PostgreSQL `COPY` + SQL Server bulk 协议；实验性，出错自动回退。MySQL `LOAD DATA` 暂缓，见配置说明）
 - [ ] 基于同一运行日志的最小 Web UI
 
 ### 开发
@@ -173,7 +174,7 @@ make lint      # golangci-lint
 make build     # 静态二进制
 ```
 
-测试套件完全离线：连接器用 SQL 文本断言、引擎用内存 fake、运行日志用临时文件 SQLite。
+测试套件完全离线：连接器用 SQL 文本断言、引擎用内存 fake、运行日志用临时文件 SQLite。原生 bulk 路径另带集成测试（默认跳过）：`docker compose -f examples/docker-compose.yml up -d` 后执行 `go test -tags integration ./internal/connector/ -run Bulk -v`（SQL Server 需自备实例并设置 `REPLICRON_IT_MSSQL_DSN`）。
 
 ### 许可证
 
@@ -287,6 +288,12 @@ Notes:
   `keys` only controls which columns are excluded from the update set.
 - SQL Server batches are automatically capped to stay under its 2100-parameter
   limit.
+- `bulk: true` (experimental) enables the target's **native bulk channel**:
+  PostgreSQL uses `COPY` (upserts merge through a session temp table with
+  `ON CONFLICT`), SQL Server uses the bulk protocol (a `##` global temp table
+  plus `MERGE`). Any bulk error falls back to regular batch writes with a
+  warning. MySQL `LOAD DATA` is deferred: go-sql-driver's local-file handlers
+  register without an unregister API, so per-batch registration would leak.
 
 ### CLI
 
@@ -376,7 +383,7 @@ Notes:
 - [x] Incremental sync (watermark column + state tracking)
 - [x] Multi-instance locking via a database lease table
 - [ ] Webhook notifications (Slack/DingTalk/Feishu) on failed runs
-- [ ] Native bulk paths (`COPY`, `SqlBulkCopy`, `LOAD DATA`) for large volumes
+- [x] Native bulk paths (PostgreSQL `COPY` + SQL Server bulk protocol; experimental with automatic fallback. MySQL `LOAD DATA` deferred, see the configuration notes)
 - [ ] Optional minimal web UI over the same run log
 
 ### Development
@@ -389,6 +396,10 @@ make build     # static binary
 
 The test suite is fully offline: connectors are tested via SQL-text
 assertions, the engine via in-memory fakes, the run log via temp-file SQLite.
+The native bulk paths additionally have integration tests (skipped by
+default): start `docker compose -f examples/docker-compose.yml up -d` and run
+`go test -tags integration ./internal/connector/ -run Bulk -v` (SQL Server
+needs a local instance via `REPLICRON_IT_MSSQL_DSN`).
 
 ### License
 

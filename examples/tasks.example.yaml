@@ -19,6 +19,7 @@ tasks:
       mode: upsert          # safe to re-run; conflict key below
       keys: [id]
       batch_size: 500
+      # bulk: true          # experimental native bulk path (PG COPY / SQL Server bulk)
 
   # SQLite source, manual runs only (no schedule)
   - name: reference-sync

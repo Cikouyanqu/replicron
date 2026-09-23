@@ -34,6 +34,10 @@ type Target struct {
 	Mode      string   `yaml:"mode"` // upsert (default) | insert
 	Keys      []string `yaml:"keys"`
 	BatchSize int      `yaml:"batch_size,omitempty"`
+	// Bulk opts into the dialect's native bulk path where available
+	// (PostgreSQL COPY, SQL Server bulk protocol); experimental — errors
+	// fall back to regular batch writes.
+	Bulk bool `yaml:"bulk,omitempty"`
 }
 
 // Incremental configures watermark-based incremental extraction: the source

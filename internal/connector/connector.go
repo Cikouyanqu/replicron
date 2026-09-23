@@ -9,6 +9,7 @@ package connector
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -52,6 +53,17 @@ type SourceConn interface {
 	// of the call.
 	Stream(ctx context.Context, query string, pageSize int, fn func([]model.Row) error) (int64, error)
 }
+
+// BulkLoader is an optional fast-path target capability (COPY / bulk
+// protocol). The engine only uses it when the task opts in via
+// target.bulk; returning ErrBulkUnsupported makes it fall back silently
+// to regular batch writes, as does any other error (after a warning).
+type BulkLoader interface {
+	BulkLoad(ctx context.Context, table string, keys, cols []string, rows []model.Row) (int64, error)
+}
+
+// ErrBulkUnsupported signals that the dialect has no native bulk path.
+var ErrBulkUnsupported = errors.New("bulk load unsupported for this dialect")
 
 // TargetConn is the write side of a sync.
 type TargetConn interface {

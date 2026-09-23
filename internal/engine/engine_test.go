@@ -358,3 +358,51 @@ func TestIncrementalMissingColumnFails(t *testing.T) {
 		t.Errorf("want failure on missing incremental column, got %+v", res)
 	}
 }
+
+// ---- bulk path tests ----
+
+type bulkFakeTarget struct {
+	fakeTarget
+	bulkErr   error
+	bulkCalls int
+}
+
+func (b *bulkFakeTarget) BulkLoad(_ context.Context, _ string, _, _ []string, rows []model.Row) (int64, error) {
+	b.mu.Lock()
+	b.bulkCalls++
+	b.mu.Unlock()
+	if b.bulkErr != nil {
+		return 0, b.bulkErr
+	}
+	return int64(len(rows)), nil
+}
+
+func TestBulkPathPreferred(t *testing.T) {
+	src := &fakeSource{pages: [][]model.Row{{{"id": 1}, {"id": 2}}}}
+	tgt := &bulkFakeTarget{}
+	e, _ := newTestEngine(t, src, tgt)
+	task := testTask()
+	task.Target.Bulk = true
+	res := e.RunTask(context.Background(), task, "manual")
+	if res.Status != model.RunStatusSucceeded || res.OKRows != 2 {
+		t.Fatalf("unexpected result: %+v", res)
+	}
+	if tgt.bulkCalls == 0 || tgt.upsertCalls != 0 {
+		t.Errorf("bulk=%d upsert=%d, want bulk path only", tgt.bulkCalls, tgt.upsertCalls)
+	}
+}
+
+func TestBulkFailureFallsBackToBatch(t *testing.T) {
+	src := &fakeSource{pages: [][]model.Row{{{"id": 1}, {"id": 2}}}}
+	tgt := &bulkFakeTarget{bulkErr: errors.New("synthetic bulk failure")}
+	e, _ := newTestEngine(t, src, tgt)
+	task := testTask()
+	task.Target.Bulk = true
+	res := e.RunTask(context.Background(), task, "manual")
+	if res.Status != model.RunStatusSucceeded || res.OKRows != 2 {
+		t.Fatalf("unexpected result: %+v", res)
+	}
+	if tgt.upsertCalls == 0 {
+		t.Error("bulk failure should degrade to batch upsert")
+	}
+}

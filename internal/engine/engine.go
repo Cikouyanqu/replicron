@@ -4,6 +4,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -186,6 +187,20 @@ func (e *Engine) RunTask(ctx context.Context, t config.Task, trigger string) *mo
 		for off := 0; off < len(page); {
 			end := min(off+batch, len(page))
 			chunk := page[off:end]
+			if t.Target.Bulk {
+				if bl, ok := tgt.(connector.BulkLoader); ok {
+					n, err := bl.BulkLoad(rctx, t.Target.Table, t.Target.Keys, cols, chunk)
+					if err == nil {
+						res.OKRows += n
+						off = end
+						continue
+					}
+					if !errors.Is(err, connector.ErrBulkUnsupported) {
+						e.Log.Warn("bulk load failed, falling back to batch writes",
+							"task", t.Name, "rows", len(chunk), "err", err)
+					}
+				}
+			}
 			n, err := writeChunk(rctx, tgt, t, cols, chunk)
 			if err != nil {
 				// Degrade to row-by-row so one bad row does not sink the
