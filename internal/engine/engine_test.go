@@ -321,11 +321,13 @@ func TestIncrementalMissingTokenFails(t *testing.T) {
 
 func TestIncrementalHeldBackOnFailures(t *testing.T) {
 	src := &fakeSource{pages: [][]model.Row{{
-		{"id": 1, "updated_at": mustTime(t, "2026-01-01T00:00:00Z"), "name": "bad"},
+		{"id": 1, "updated_at": mustTime(t, "2026-01-01T00:00:00Z"), "name": "fine"},
+		{"id": 2, "updated_at": mustTime(t, "2026-01-02T00:00:00Z"), "name": "bad"},
 	}}}
 	e, store := newTestEngine(t, src, &fakeTarget{failBatchMarker: "bad", failRowMarker: "bad"})
 	res := e.RunTask(context.Background(), incrementalTask(), "manual")
-	if res.Status != model.RunStatusSucceeded || res.FailRows != 1 {
+	// Partial failure keeps the succeeded-with-failures contract...
+	if res.Status != model.RunStatusSucceeded || res.OKRows != 1 || res.FailRows != 1 {
 		t.Fatalf("unexpected result: %+v", res)
 	}
 	wm, err := store.GetWatermark("demo")
@@ -404,5 +406,20 @@ func TestBulkFailureFallsBackToBatch(t *testing.T) {
 	}
 	if tgt.upsertCalls == 0 {
 		t.Error("bulk failure should degrade to batch upsert")
+	}
+}
+
+func TestAllRowsFailedMarksRunFailed(t *testing.T) {
+	src := &fakeSource{pages: [][]model.Row{{
+		{"id": 1, "name": "bad"}, {"id": 2, "name": "bad"},
+	}}}
+	tgt := &fakeTarget{failBatchMarker: "bad", failRowMarker: "bad"}
+	e, _ := newTestEngine(t, src, tgt)
+	res := e.RunTask(context.Background(), testTask(), "manual")
+	if res.Status != model.RunStatusFailed {
+		t.Errorf("all-rows-failed run reported %s, want failed", res.Status)
+	}
+	if res.OKRows != 0 || res.FailRows != 2 {
+		t.Errorf("counts wrong: %+v", res)
 	}
 }

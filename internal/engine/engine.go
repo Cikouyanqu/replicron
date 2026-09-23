@@ -243,6 +243,12 @@ func (e *Engine) RunTask(ctx context.Context, t config.Task, trigger string) *mo
 		return res
 	}
 	res.Status = model.RunStatusSucceeded
+	if res.TotalRows > 0 && res.OKRows == 0 && res.FailRows > 0 {
+		// Partial failures keep the "succeeded with failures" contract, but a
+		// run where every row failed is a failure, full stop.
+		res.Status = model.RunStatusFailed
+		res.Err = fmt.Sprintf("all %d rows failed (see samples)", res.FailRows)
+	}
 	if wm != nil {
 		e.finalizeWatermark(t, runID, res, wm)
 	}
