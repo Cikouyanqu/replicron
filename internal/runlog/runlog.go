@@ -146,6 +146,73 @@ func (s *Store) EventsCount(runID int64) (int, error) {
 	return n, err
 }
 
+// RunEvent is one append-only progress/diagnostic record of a run.
+type RunEvent struct {
+	ID      int64
+	Kind    string
+	Payload string
+	TS      time.Time
+}
+
+// ListEvents returns events for a run, oldest first.
+func (s *Store) ListEvents(runID int64, limit int) ([]RunEvent, error) {
+	if limit <= 0 {
+		limit = 500
+	}
+	rows, err := s.db.Query(
+		`SELECT id, kind, payload, ts FROM run_events WHERE run_id = ? ORDER BY id LIMIT ?`,
+		runID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []RunEvent
+	for rows.Next() {
+		var e RunEvent
+		var payload, ts sql.NullString
+		if err := rows.Scan(&e.ID, &e.Kind, &payload, &ts); err != nil {
+			return nil, err
+		}
+		e.Payload = payload.String
+		e.TS, _ = time.Parse(time.RFC3339, ts.String)
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// rowScanner is satisfied by both *sql.Row and *sql.Rows.
+type rowScanner interface{ Scan(dest ...any) error }
+
+func scanRun(row rowScanner) (*model.Run, error) {
+	var r model.Run
+	var errStr, samples, started, finished sql.NullString
+	if err := row.Scan(&r.ID, &r.Task, &r.Trigger, &r.Status, &r.TotalRows,
+		&r.OKRows, &r.FailRows, &errStr, &samples, &started, &finished); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	r.Error = errStr.String
+	if samples.Valid && samples.String != "" {
+		_ = json.Unmarshal([]byte(samples.String), &r.Samples)
+	}
+	r.StartedAt, _ = time.Parse(time.RFC3339, started.String)
+	if finished.Valid && finished.String != "" {
+		if t, err := time.Parse(time.RFC3339, finished.String); err == nil {
+			r.FinishedAt = &t
+		}
+	}
+	return &r, nil
+}
+
+// GetRun returns a single run by id, or nil when it does not exist.
+func (s *Store) GetRun(id int64) (*model.Run, error) {
+	row := s.db.QueryRow(`SELECT id, task, trigger_kind, status, total_rows, ok_rows, fail_rows,
+	             error, samples, started_at, finished_at FROM runs WHERE id = ?`, id)
+	return scanRun(row)
+}
+
 // List returns the most recent runs, optionally filtered by task.
 func (s *Store) List(task string, n int) ([]model.Run, error) {
 	if n <= 0 {
@@ -170,24 +237,11 @@ func (s *Store) List(task string, n int) ([]model.Run, error) {
 
 	var out []model.Run
 	for rows.Next() {
-		var r model.Run
-		var errStr, samples, started, finished sql.NullString
-		if err := rows.Scan(&r.ID, &r.Task, &r.Trigger, &r.Status, &r.TotalRows,
-			&r.OKRows, &r.FailRows, &errStr, &samples, &started, &finished); err != nil {
+		r, err := scanRun(rows)
+		if err != nil {
 			return nil, err
 		}
-		r.Error = errStr.String
-		if samples.Valid && samples.String != "" {
-			_ = json.Unmarshal([]byte(samples.String), &r.Samples)
-		}
-		r.StartedAt, _ = time.Parse(time.RFC3339, started.String)
-		if finished.Valid && finished.String != "" {
-			t, err := time.Parse(time.RFC3339, finished.String)
-			if err == nil {
-				r.FinishedAt = &t
-			}
-		}
-		out = append(out, r)
+		out = append(out, *r)
 	}
 	return out, rows.Err()
 }

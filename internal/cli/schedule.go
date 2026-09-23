@@ -21,6 +21,7 @@ func newScheduleCmd() *cobra.Command {
 	var configPath, dbPath, addr, locking string
 	var keep int
 	var leaseTTL time.Duration
+	var uiEnabled bool
 	cmd := &cobra.Command{
 		Use:   "schedule",
 		Short: "Run as a daemon: execute tasks on their cron schedules, serve /metrics and /healthz",
@@ -44,7 +45,14 @@ func newScheduleCmd() *cobra.Command {
 			log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
-			return daemon.Run(ctx, cfg, dbPath, addr, keep, lock, log)
+			return daemon.Run(ctx, daemon.Options{
+				Config:   cfg,
+				DBPath:   dbPath,
+				Addr:     addr,
+				KeepRuns: keep,
+				Lock:     lock,
+				UI:       uiEnabled,
+			}, log)
 		},
 	}
 	cmd.Flags().StringVarP(&configPath, "config", "c", "replicron.yaml", "task configuration file")
@@ -53,5 +61,6 @@ func newScheduleCmd() *cobra.Command {
 	cmd.Flags().IntVar(&keep, "keep-runs", 10000, "retain at most this many run records")
 	cmd.Flags().StringVar(&locking, "locking", "process", "task mutex: process (in-memory) or db (lease table in --db, enables multi-instance)")
 	cmd.Flags().DurationVar(&leaseTTL, "lease-ttl", 10*time.Minute, "database lease TTL; renewed on progress, pick a value above the slowest page")
+	cmd.Flags().BoolVar(&uiEnabled, "ui", false, "serve the read-only run log UI at /ui")
 	return cmd
 }

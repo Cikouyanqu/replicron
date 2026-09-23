@@ -16,31 +16,41 @@ import (
 	"github.com/Cikouyanqu/replicron/internal/metrics"
 	"github.com/Cikouyanqu/replicron/internal/registry"
 	"github.com/Cikouyanqu/replicron/internal/runlog"
+	"github.com/Cikouyanqu/replicron/internal/ui"
 )
+
+// Options configures the daemon.
+type Options struct {
+	Config   *config.Config
+	DBPath   string          // run log (and lease) database file
+	Addr     string          // HTTP listen address for metrics/healthz/ui
+	KeepRuns int             // retain at most this many run records
+	Lock     registry.Locker // nil = in-process mutex
+	UI       bool            // mount the read-only run log UI at /ui
+}
 
 // Run blocks until ctx is cancelled, executing tasks on their schedules.
 // Cancelling ctx also cancels in-flight runs, which then finalize with
-// status "failed" before the process exits. A non-nil lock replaces the
-// default in-process mutex (used for multi-instance database leases).
-func Run(ctx context.Context, cfg *config.Config, dbPath, addr string, keepRuns int, lock registry.Locker, log *slog.Logger) error {
-	store, err := runlog.Open(dbPath)
+// status "failed" before the process exits.
+func Run(ctx context.Context, opts Options, log *slog.Logger) error {
+	store, err := runlog.Open(opts.DBPath)
 	if err != nil {
 		return fmt.Errorf("open run log: %w", err)
 	}
 	defer func() { _ = store.Close() }()
-	if err := store.Prune(keepRuns); err != nil {
+	if err := store.Prune(opts.KeepRuns); err != nil {
 		log.Warn("run log prune failed", "err", err)
 	}
 
 	met := metrics.New()
 	eng := engine.New(store, met, log)
-	if lock != nil {
-		eng.Reg = lock
+	if opts.Lock != nil {
+		eng.Reg = opts.Lock
 	}
 
 	c := cron.New(cron.WithSeconds())
 	scheduled := 0
-	for _, t := range cfg.Tasks {
+	for _, t := range opts.Config.Tasks {
 		if t.Schedule == "" || !t.IsEnabled {
 			continue
 		}
@@ -59,7 +69,7 @@ func Run(ctx context.Context, cfg *config.Config, dbPath, addr string, keepRuns 
 	}
 	c.Start()
 	defer c.Stop()
-	log.Info("scheduler started", "tasks", len(cfg.Tasks), "scheduled", scheduled)
+	log.Info("scheduler started", "tasks", len(opts.Config.Tasks), "scheduled", scheduled)
 
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", met.Handler())
@@ -67,7 +77,14 @@ func Run(ctx context.Context, cfg *config.Config, dbPath, addr string, keepRuns 
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
-	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	if opts.UI {
+		h, err := ui.New(store, opts.Config)
+		if err != nil {
+			return fmt.Errorf("init ui: %w", err)
+		}
+		h.Register(mux)
+	}
+	srv := &http.Server{Addr: opts.Addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -75,8 +92,8 @@ func Run(ctx context.Context, cfg *config.Config, dbPath, addr string, keepRuns 
 			errCh <- err
 		}
 	}()
-	log.Info("http server started", "addr", addr,
-		"endpoints", "/metrics /healthz")
+	log.Info("http server started", "addr", opts.Addr,
+		"endpoints", "/metrics /healthz"+map[bool]string{true: " /ui", false: ""}[opts.UI])
 
 	select {
 	case <-ctx.Done():

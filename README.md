@@ -22,7 +22,7 @@ replicron 按计划把源查询的结果行写入目标表，且天然支持安�
 - **cron 调度**：6 位表达式（含秒）；也支持手动一次性执行。
 - **优雅降级**：批量写失败自动降级逐行重试，单行坏数据不拖垮整轮；失败样本留存到运行日志。
 - **追加式运行日志**：每次运行落 SQLite（含进度事件）；崩溃遗留的 running 记录重启时清扫为 interrupted。
-- **可观测性**：Prometheus `/metrics` 与 `/healthz`。
+- **可观测性**：Prometheus `/metrics`、`/healthz`，以及 `--ui` 开启的只读运行面板（服务端渲染、零 JS、5 秒自刷新，展示运行列表/详情/事件与失败样本）。
 - **密钥不落配置**：DSN 通过环境变量（`dsn_env`）解析，凭据不进 YAML、不进 git。
 - **纯 Go 单静态二进制**：无 CGO，可交叉编译；提供 distroless 镜像。
 
@@ -109,7 +109,7 @@ tasks:
 | 命令 | 用途 |
 |---|---|
 | `replicron run -c FILE [-t TASK]` | 匹配的任务各跑一次后退出 |
-| `replicron schedule -c FILE [--addr :9101] [--locking db]` | 守护进程：cron 循环 + `/metrics` + `/healthz` |
+| `replicron schedule -c FILE [--addr :9101] [--locking db] [--ui]` | 守护进程：cron 循环 + `/metrics` + `/healthz` + `/ui` 运行面板 |
 | `replicron validate -c FILE` | 解析校验配置并打印摘要 |
 | `replicron runs [--db FILE] [-t TASK] [-n 20]` | 查看最近的运行记录 |
 
@@ -164,7 +164,7 @@ tasks:
 - [x] 数据库租约表实现多实例互斥
 - [ ] 失败运行的 webhook 通知（Slack / 钉钉 / 飞书）
 - [x] 原生批量通道（PostgreSQL `COPY` + SQL Server bulk 协议；实验性，出错自动回退。MySQL `LOAD DATA` 暂缓，见配置说明）
-- [ ] 基于同一运行日志的最小 Web UI
+- [x] 基于同一运行日志的最小 Web UI（`--ui`，只读、零 JS）
 
 ### 开发
 
@@ -204,7 +204,9 @@ be source or target (SQLite is a great zero-dependency choice for testing).
   a single bad row never sinks a run; failures are sampled into the run log.
 - **Append-only run log** — every run is persisted to SQLite with progress
   events; runs orphaned by a crash are swept to `interrupted` on restart.
-- **Metrics** — Prometheus `/metrics` and `/healthz` endpoints.
+- **Metrics & UI** — Prometheus `/metrics`, `/healthz`, and an opt-in
+  read-only run dashboard at `/ui` (`--ui`): server-rendered, zero-JS,
+  auto-refreshing run list with per-run detail, events and failure samples.
 - **Secrets stay out of config** — DSNs resolve from environment variables
   (`dsn_env`), so credentials never live in YAML or git.
 - **Single static binary** — pure Go (no CGO), cross-compiles anywhere;
@@ -300,7 +302,7 @@ Notes:
 | Command | Purpose |
 |---|---|
 | `replicron run -c FILE [-t TASK]` | Run matching tasks once, then exit |
-| `replicron schedule -c FILE [--addr :9101] [--locking db]` | Daemon: cron loop + `/metrics` + `/healthz` |
+| `replicron schedule -c FILE [--addr :9101] [--locking db] [--ui]` | Daemon: cron loop + `/metrics` + `/healthz` + `/ui` run dashboard |
 | `replicron validate -c FILE` | Parse and validate the config, print a summary |
 | `replicron runs [--db FILE] [-t TASK] [-n 20]` | List recent run records |
 
@@ -384,7 +386,7 @@ Notes:
 - [x] Multi-instance locking via a database lease table
 - [ ] Webhook notifications (Slack/DingTalk/Feishu) on failed runs
 - [x] Native bulk paths (PostgreSQL `COPY` + SQL Server bulk protocol; experimental with automatic fallback. MySQL `LOAD DATA` deferred, see the configuration notes)
-- [ ] Optional minimal web UI over the same run log
+- [x] Optional minimal web UI over the same run log (`--ui`, read-only, zero JS)
 
 ### Development
 

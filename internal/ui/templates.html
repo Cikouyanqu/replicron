@@ -1,0 +1,95 @@
+{{define "head"}}
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: ui-sans-serif, system-ui, sans-serif; margin: 2rem auto; max-width: 64rem; padding: 0 1rem; }
+  h1 { font-size: 1.3rem; } h1 a { text-decoration: none; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.85rem; }
+  th, td { text-align: left; padding: 0.35rem 0.6rem; border-bottom: 1px solid color-mix(in srgb, currentColor 15%, transparent); }
+  th { opacity: 0.7; font-weight: 600; }
+  .status { padding: 0.05rem 0.45rem; border-radius: 0.6rem; font-size: 0.75rem; }
+  .succeeded   { background: #1a7f37; color: #fff; }
+  .failed      { background: #cf222e; color: #fff; }
+  .running     { background: #0969da; color: #fff; }
+  .skipped     { background: #6e7781; color: #fff; }
+  .interrupted { background: #9a6700; color: #fff; }
+  .muted { opacity: 0.65; }
+  form { display: inline-flex; gap: 0.5rem; margin: 0.5rem 0; font-size: 0.85rem; }
+  code, pre { font-family: ui-monospace, monospace; font-size: 0.8rem; }
+  pre { white-space: pre-wrap; word-break: break-all; }
+  .chips { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.5rem 0 1rem; }
+  .chip { border: 1px solid color-mix(in srgb, currentColor 25%, transparent); border-radius: 1rem; padding: 0.1rem 0.7rem; font-size: 0.78rem; }
+  .kv td:first-child { opacity: 0.7; white-space: nowrap; vertical-align: top; }
+</style>
+{{end}}
+
+{{define "index"}}
+<!doctype html>
+<html lang="en">
+<head><title>replicron — runs</title>{{template "head"}}<meta http-equiv="refresh" content="5"></head>
+<body>
+<h1><a href="/ui">replicron</a> · runs</h1>
+<div class="chips">
+  {{range .Tasks}}<span class="chip">{{.Name}} · {{.Schedule}}{{if not .Enabled}} · disabled{{end}}</span>{{end}}
+</div>
+<form method="get" action="/ui">
+  <input name="task" placeholder="task filter" value="{{.FilterTask}}">
+  <select name="status">
+    <option value="">any status</option>
+    {{range .Statuses}}<option value="{{.}}"{{if eq $.FilterStatus .}} selected{{end}}>{{.}}</option>{{end}}
+  </select>
+  <button>filter</button>
+</form>
+<table>
+  <tr><th>ID</th><th>Task</th><th>Trigger</th><th>Status</th><th>OK/Fail</th><th>Started (UTC)</th><th>Took</th><th>Error</th></tr>
+  {{range .Runs}}
+  <tr>
+    <td><a href="/ui/run/{{.ID}}">{{.ID}}</a></td>
+    <td>{{.Task}}</td>
+    <td class="muted">{{.Trigger}}</td>
+    <td><span class="status {{.Status}}">{{.Status}}</span></td>
+    <td>{{.OK}}/{{.Fail}}</td>
+    <td class="muted">{{.Started}}</td>
+    <td class="muted">{{.Duration}}</td>
+    <td>{{.Err}}</td>
+  </tr>
+  {{else}}
+  <tr><td colspan="8" class="muted">no runs yet</td></tr>
+  {{end}}
+</table>
+<p class="muted">auto-refreshes every 5s · read-only view over the run log</p>
+</body></html>
+{{end}}
+
+{{define "detail"}}
+<!doctype html>
+<html lang="en">
+<head><title>replicron — run #{{.Run.ID}}</title>{{template "head"}}</head>
+<body>
+<h1><a href="/ui">replicron</a> · run #{{.Run.ID}}</h1>
+<table class="kv">
+  <tr><td>Task</td><td>{{.Run.Task}}</td></tr>
+  <tr><td>Trigger</td><td>{{.Run.Trigger}}</td></tr>
+  <tr><td>Status</td><td><span class="status {{.Run.Status}}">{{.Run.Status}}</span></td></tr>
+  <tr><td>Rows</td><td>{{.Run.OKRows}} ok / {{.Run.FailRows}} failed / {{.Run.TotalRows}} total</td></tr>
+  <tr><td>Started (UTC)</td><td>{{.Run.StartedAt.Format "2006-01-02 15:04:05"}}</td></tr>
+  <tr><td>Finished (UTC)</td><td>{{if .Run.FinishedAt}}{{.Run.FinishedAt.Format "2006-01-02 15:04:05"}}{{else}}—{{end}}</td></tr>
+  <tr><td>Error</td><td>{{if .Run.Error}}<pre>{{.Run.Error}}</pre>{{else}}—{{end}}</td></tr>
+</table>
+{{if .Run.Samples}}
+<h2>Failure samples</h2>
+{{range .Run.Samples}}<pre>{{.}}</pre>{{end}}
+{{end}}
+<h2>Events</h2>
+<table>
+  <tr><th>Time (UTC)</th><th>Kind</th><th>Payload</th></tr>
+  {{range .Events}}
+  <tr><td class="muted">{{.TS.Format "15:04:05.000"}}</td><td>{{.Kind}}</td><td><code>{{.Payload}}</code></td></tr>
+  {{else}}
+  <tr><td colspan="3" class="muted">no events</td></tr>
+  {{end}}
+</table>
+<p><a href="/ui">&larr; back to runs</a></p>
+</body></html>
+{{end}}
