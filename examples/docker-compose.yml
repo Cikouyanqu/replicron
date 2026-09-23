@@ -1,0 +1,52 @@
+# Three-container demo: PostgreSQL + MySQL + replicron.
+#   docker compose -f examples/docker-compose.yml up -d
+#   docker compose exec replicron replicron run -c /etc/replicron/demo.yaml
+#
+# It copies a table from Postgres into MySQL every minute.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: demo
+      POSTGRES_PASSWORD: demo
+      POSTGRES_DB: demo
+    ports: ["5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U demo"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  mysql:
+    image: mysql:8
+    environment:
+      MYSQL_ROOT_PASSWORD: demo
+      MYSQL_DATABASE: demo
+      MYSQL_USER: demo
+      MYSQL_PASSWORD: demo
+    ports: ["3306:3306"]
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -pdemo"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  replicron:
+    build: ..
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+    environment:
+      SRC_DSN: postgres://demo:demo@postgres:5432/demo
+      DST_DSN: demo:demo@tcp(mysql:3306)/demo
+    volumes:
+      - ./demo.yaml:/etc/replicron/demo.yaml:ro
+      - runlog:/var/lib/replicron
+    command: ["schedule", "-c", "/etc/replicron/demo.yaml", "--db", "/var/lib/replicron/runs.db", "--addr", ":9101"]
+    ports: ["9101:9101"]
+
+volumes:
+  runlog:

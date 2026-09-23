@@ -1,0 +1,15 @@
+# Task file used by examples/docker-compose.yml.
+tasks:
+  - name: demo-pg-to-mysql
+    schedule: "0 * * * * *"   # every minute
+    timeout: 2m
+    source:
+      type: postgres
+      dsn_env: SRC_DSN
+      query: "SELECT id, payload FROM source_table"
+    target:
+      type: mysql
+      dsn_env: DST_DSN
+      table: target_table
+      mode: upsert
+      keys: [id]

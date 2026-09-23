@@ -1,0 +1,13 @@
+.git/
+.github/
+smoke/
+dist/
+*.db
+*.db-wal
+*.db-shm
+replicron
+replicron.exe
+coverage*
+README*.md
+docs/
+examples/

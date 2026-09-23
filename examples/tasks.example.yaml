@@ -1,0 +1,54 @@
+# Example task configuration.
+# Copy to replicron.yaml and adapt. Prefer dsn_env over inline dsn so that
+# credentials never end up in this file.
+
+tasks:
+  # PostgreSQL -> MySQL, daily at 04:00
+  - name: orders-sync
+    schedule: "0 0 4 * * *"
+    timeout: 30m
+    source:
+      type: postgres
+      dsn_env: SRC_DSN
+      # Column names must match the target table exactly; use AS for mapping.
+      query: "SELECT id, total, updated_at FROM orders"
+    target:
+      type: mysql
+      dsn_env: DST_DSN
+      table: reporting.orders
+      mode: upsert          # safe to re-run; conflict key below
+      keys: [id]
+      batch_size: 500
+
+  # SQLite source, manual runs only (no schedule)
+  - name: reference-sync
+    source:
+      type: sqlite
+      dsn: "file:reference.db"
+      query: "SELECT code, label FROM ref_data"
+    target:
+      type: sqlite
+      dsn: "file:warehouse.db"
+      table: ref_data
+      mode: upsert
+      keys: [code]
+
+  # SQL Server -> PostgreSQL, every 5 minutes, into an empty table
+  # (plain inserts, no conflict handling)
+  # - name: bootstrap
+  #   schedule: "0 */5 * * * *"
+  #   source:
+  #     type: sqlserver
+  #     dsn_env: MSSQL_DSN
+  #     query: "SELECT id, name FROM dbo.customers"
+  #   target:
+  #     type: postgres
+  #     dsn_env: PG_DSN
+  #     table: public.customers
+  #     mode: insert
+#
+# DSN formats (any Go driver DSN works):
+#   postgres:   postgres://user:pass@host:5432/dbname
+#   mysql:      user:pass@tcp(host:3306)/dbname
+#   sqlserver:  sqlserver://user:pass@host:1433?database=dbname
+#   sqlite:     file:path/to.db

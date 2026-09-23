@@ -1,0 +1,18 @@
+# binaries
+/replicron
+/replicron.exe
+/dist/
+
+# local databases and logs
+*.db
+*.db-wal
+*.db-shm
+*.log
+
+# smoke test workspace
+/smoke/
+
+# tooling
+coverage*
+.idea/
+.vscode/
